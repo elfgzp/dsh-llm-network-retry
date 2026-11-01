@@ -71,6 +71,13 @@ function compositionContext() {
       effects.push(factory);
       return () => {};
     },
+    // This composition harness provides none of the crash-recovery services, so
+    // a correct `ctx.inject` runs no callback at all — matching a profile without
+    // session persistence. The real-service behavior is covered by
+    // `crash-recovery-real.test.js` against actual Cordis.
+    inject() {
+      return () => {};
+    },
   };
   return { ctx, listeners, effects };
 }
