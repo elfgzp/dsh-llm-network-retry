@@ -154,10 +154,10 @@ node --test test/*.test.js
 | `test/host.test.js` | 瀑布行为：先落盘再等待、取消、委派、卸载 |
 | `test/resume.test.js` | 崩溃判定：只看末尾轮次、未完成工具配对、继续消息措辞 |
 | `test/host-recovery.test.js` | 恢复操作：只读打开日志、幂等、拒绝陈旧横幅 |
-| `test/crash-recovery-rpc.test.js` | RPC 端点行为，含「绝不自动继续」的回归断言 |
+| `test/crash-recovery-real.test.js` | **用真实的 Context / Service 启动真实 Cordis**，按浏览器方式打 RPC；含「绝不自动继续」的回归断言 |
 | `test/composition.test.js` | 加载**真实的**自带 `dsh-llm-retry` 执行器，验证不双重建链、事件字段逐字段一致 |
 
-后一组组合测试需要能读取 `app.asar`，所以要用 Harness 自带的 Node 跑；普通 Node 下这 7 个会自动 skip：
+最后两组都需要能读取 `app.asar`（加载真实的自带执行器和真实的 Cordis），所以要用 Harness 自带的 Node 跑；普通 Node 下这 15 个会自动 skip：
 
 ```bash
 DSH_DESKTOP_NODE_EXECUTABLE="/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness" \
