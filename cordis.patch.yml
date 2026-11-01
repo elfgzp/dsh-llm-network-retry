@@ -1,0 +1,28 @@
+# dsh-llm-network-retry — network-resilient model requests.
+#
+# Runs on the agent loop's `agent/request-error` waterfall *before* the shipped
+# `llm-retry` row (it prepends itself). Codex-style split:
+#
+#   * connection failures (TRANSPORT / TIMEOUT / NETWORK) retry with no attempt
+#     limit, 5 s rising to 60 s, until the network comes back;
+#   * everything else keeps a bounded budget (5 attempts, 500 ms → 10 s);
+#   * auth, quota, context-window and aborted turns are never retried.
+#
+# Each scheduled attempt is appended to the session log before its wait, so the
+# Chat UI renders the native retry row with a live countdown, and cancelling the
+# turn stops the wait immediately.
+#
+# Configuration is optional; the defaults below are already the Codex shape.
+# Uncomment and edit only what you want to change:
+#
+#   config:
+#     preset: codex              # codex | always | normal
+#     maxRetries: 5              # bounded budget (non-connection failures)
+#     unboundedConnectionRetries: true
+#     maxUnboundedWaitMs: 0      # 0 = wait forever; e.g. 1800000 = stop after 30 min
+#     providers: []              # [] = every provider route
+#     models: []                 # [] = every model
+- insert:
+    - id: llm-network-retry
+      name: dsh-llm-network-retry
+      config: {}

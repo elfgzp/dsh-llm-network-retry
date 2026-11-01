@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Network retry",
+    "description": "Keeps a model request alive through a network outage: connection failures retry until the network returns, other errors keep a short bounded budget, and cancelling the turn stops the wait."
+  }
+}

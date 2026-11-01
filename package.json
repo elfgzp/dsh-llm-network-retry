@@ -1,0 +1,44 @@
+{
+  "name": "dsh-llm-network-retry",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Keep a model request alive while the network is down: connection failures retry without an attempt limit (Codex-style), everything else stays bounded so real errors still fail fast.",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./policy": "./lib/policy.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/*.js",
+    "test/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/elfgzp/dsh-llm-network-retry.git"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "retry",
+    "network",
+    "resilience"
+  ],
+  "license": "MIT"
+}

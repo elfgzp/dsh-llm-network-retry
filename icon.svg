@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Network retry">
+  <rect width="64" height="64" rx="14" fill="#0f766e"/>
+  <!-- Signal arcs: the network, drawn as radiating rings. -->
+  <g fill="none" stroke="#ccfbf1" stroke-linecap="round" stroke-width="3">
+    <path d="M23 41a13 13 0 0 1 13-13" opacity="0.45"/>
+    <path d="M20 31a23 23 0 0 1 23-11" opacity="0.75"/>
+  </g>
+  <circle cx="23" cy="41" r="4" fill="#ccfbf1"/>
+  <!-- Retry arrow: the request coming back around. -->
+  <path d="M38 30a13 13 0 1 1-4.6 20.2" fill="none" stroke="#f0fdfa" stroke-linecap="round" stroke-width="4"/>
+  <path d="M32.5 46.5l1.2 6.2 6.1-1.8z" fill="#f0fdfa"/>
+</svg>
