@@ -3,11 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Keep a model request alive while the network is down: connection failures retry without an attempt limit (Codex-style), everything else stays bounded so real errors still fail fast.",
+  "description": "Keep model requests alive: connection failures retry without an attempt limit (Codex-style) while real errors fail fast, and a turn killed by a process crash offers a one-click, state-checking continuation.",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./policy": "./lib/policy.js",
+    "./resume": "./lib/resume.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg",
     "./package.json": "./package.json"
@@ -30,6 +32,14 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-chat"
+      ]
     }
   },
   "keywords": [
@@ -38,7 +48,8 @@
     "plugin",
     "retry",
     "network",
-    "resilience"
+    "resilience",
+    "crash-recovery"
   ],
   "license": "MIT"
 }

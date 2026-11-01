@@ -36,6 +36,14 @@ function fakeContext(config = {}) {
       effects.push(factory);
       return () => {};
     },
+    // `ctx.inject([...], cb)` runs the callback only when those services exist.
+    // This suite tests the retry executor in isolation, so it offers none of them
+    // and the crash-recovery half stays inactive — which is the real behavior in
+    // a profile without session persistence.
+    inject(_names, _callback) {
+      return () => {};
+    },
+    agents: { get: () => undefined },
   };
   return { ctx, listeners, effects, logs };
 }
