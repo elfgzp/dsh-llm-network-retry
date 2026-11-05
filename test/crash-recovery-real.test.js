@@ -265,7 +265,7 @@ describe('automatic continuation at boot', () => {
     return { sent, emitted };
   }
 
-  it('continues an interrupted turn when the session starts after a restart', async (t) => {
+  it('continues an interrupted turn published as startup', async (t) => {
     const cordis = await loadCordis();
     if (cordis === null) return t.skip('no dsh installation to load Cordis from');
     const { sent } = await bootAndAnnounce({ source: 'startup', events: interruptedLog(), cordis });
@@ -277,11 +277,31 @@ describe('automatic continuation at boot', () => {
     assert.match(message.content[0].text, /第 7 轮/);
   });
 
-  it('leaves a normal resume alone', async (t) => {
+  it('continues when an existing session is reopened (the real crash path)', async (t) => {
     const cordis = await loadCordis();
     if (cordis === null) return t.skip('no dsh installation to load Cordis from');
+    // This is the source the real open-session path publishes: the API session
+    // controller calls `agents.resume`, which publishes `resume` — NOT `startup`.
+    // `startup` only ever marks a brand-new, empty session.
     const { sent } = await bootAndAnnounce({ source: 'resume', events: interruptedLog(), cordis });
-    assert.equal(sent.length, 0, 'opening an old session later must not resurrect it');
+    assert.equal(sent.length, 1, 'reopening the interrupted session must resume it');
+    assert.match(sent[0].content[0].text, /第 7 轮/);
+  });
+
+  it('leaves a finished old session alone even when reopened', async (t) => {
+    const cordis = await loadCordis();
+    if (cordis === null) return t.skip('no dsh installation to load Cordis from');
+    const { sent } = await bootAndAnnounce({ source: 'resume', events: cleanLog(), cordis });
+    assert.equal(sent.length, 0, 'the log guard, not the source, decides');
+  });
+
+  it('ignores clear and compact', async (t) => {
+    const cordis = await loadCordis();
+    if (cordis === null) return t.skip('no dsh installation to load Cordis from');
+    for (const source of ['clear', 'compact']) {
+      const { sent } = await bootAndAnnounce({ source, events: interruptedLog(), cordis });
+      assert.equal(sent.length, 0, `${source} must not trigger a continuation`);
+    }
   });
 
   it('leaves a freshly created session alone', async (t) => {
@@ -304,5 +324,84 @@ describe('automatic continuation at boot', () => {
     ];
     const { sent } = await bootAndAnnounce({ source: 'startup', events: looping, cordis });
     assert.equal(sent.length, 0, 'a reproducible crash must terminate, not restart-loop');
+  });
+});
+
+describe('boot scan over real Cordis', () => {
+  it('reports interrupted sessions without activating any of them', async (t) => {
+    const cordis = await loadCordis();
+    if (cordis === null) return t.skip('no dsh installation to load Cordis from');
+    const { Context, Service } = cordis;
+
+    const routes = new Map();
+    const log = {
+      crashed: [
+        event('turn/start', { turn: 4 }, 0),
+        event('turn/end', { turn: 4, reason: { kind: 'interrupted' } }, 1),
+      ],
+      finished: [event('turn/end', { turn: 2, reason: { kind: 'completed' } }, 0)],
+    };
+    const opened = [];
+
+    class Persistence extends Service {
+      constructor(ctx) {
+        super(ctx, 'sessionPersistence');
+      }
+      async list() {
+        return Object.keys(log).map((id) => ({ id }));
+      }
+      async open(id, access) {
+        opened.push({ id, access });
+        return {
+          async read() {
+            return { events: log[id] ?? [] };
+          },
+          async close() {},
+        };
+      }
+    }
+    class Connection extends Service {
+      constructor(ctx) {
+        super(ctx, 'connection');
+        this.rpc = {
+          handle(channel, handler) {
+            routes.set(channel, handler);
+            return async () => routes.delete(channel);
+          },
+        };
+      }
+    }
+    class WebServer extends Service {
+      constructor(ctx) {
+        super(ctx, 'webServer');
+      }
+    }
+    class Agents extends Service {
+      constructor(ctx) {
+        super(ctx, 'agents');
+        this.resumed = [];
+      }
+      get() {
+        return undefined;
+      }
+    }
+
+    const app = new Context({ name: 'test-root' });
+    for (const [name, S] of [['p', Persistence], ['c', Connection], ['w', WebServer], ['a', Agents]]) {
+      app.plugin({ name, apply: (ctx) => void new S(ctx) });
+    }
+    app.plugin({ name: 'network-retry', apply: (ctx) => apply(ctx, {}) });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    const handler = routes.get('/llm-network-retry');
+    assert.ok(handler, 'channel registered');
+    const result = await handler('scan', {});
+    assert.equal(result.ok, true);
+    assert.equal(result.value.done, true, 'the boot scan finished before the client asked');
+    assert.deepEqual(Object.keys(result.value.sessions), ['crashed']);
+    assert.equal(result.value.sessions.crashed.turn, 4);
+
+    // The whole point: scanning never claims a session writer.
+    for (const open of opened) assert.equal(open.access, 'read');
   });
 });
