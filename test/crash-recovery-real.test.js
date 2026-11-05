@@ -201,3 +201,108 @@ describe('crash recovery on the real runtime', { concurrency: false }, () => {
     assert.equal(result.ok, false);
   });
 });
+
+describe('automatic continuation at boot', () => {
+  /**
+   * Fire `agent/created` the way the loop does, then let the plugin's
+   * fire-and-forget continuation settle.
+   */
+  async function bootAndAnnounce({ source, events, cordis }) {
+    const { Context, Service } = cordis;
+    const routes = new Map();
+    const sent = [];
+    const emitted = [];
+
+    class Persistence extends Service {
+      constructor(ctx) {
+        super(ctx, 'sessionPersistence');
+      }
+      async open() {
+        return {
+          async read() {
+            return { events };
+          },
+          async close() {},
+        };
+      }
+    }
+    class Connection extends Service {
+      constructor(ctx) {
+        super(ctx, 'connection');
+        this.rpc = {
+          handle(channel, handler) {
+            routes.set(channel, handler);
+            return async () => routes.delete(channel);
+          },
+        };
+      }
+    }
+    class WebServer extends Service {
+      constructor(ctx) {
+        super(ctx, 'webServer');
+      }
+    }
+    const liveAgent = { id: 's1', followup: (message) => sent.push(message) };
+    class Agents extends Service {
+      constructor(ctx) {
+        super(ctx, 'agents');
+      }
+      get(id) {
+        return id === 's1' ? liveAgent : undefined;
+      }
+    }
+
+    const app = new Context({ name: 'test-root' });
+    for (const [name, S] of [['p', Persistence], ['c', Connection], ['w', WebServer], ['a', Agents]]) {
+      app.plugin({ name, apply: (ctx) => void new S(ctx) });
+    }
+    app.plugin({ name: 'network-retry', apply: (ctx) => apply(ctx, {}) });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    // Dispatch the same event the AgentLoop dispatches after entering an agent.
+    app.serial('agent/created', { agent: liveAgent, source });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return { sent, emitted };
+  }
+
+  it('continues an interrupted turn when the session starts after a restart', async (t) => {
+    const cordis = await loadCordis();
+    if (cordis === null) return t.skip('no dsh installation to load Cordis from');
+    const { sent } = await bootAndAnnounce({ source: 'startup', events: interruptedLog(), cordis });
+
+    assert.equal(sent.length, 1, 'a crash plus restart resumes without a click');
+    const message = sent[0];
+    assert.equal(message.source.automatic, true);
+    assert.match(message.content[0].text, /自动发送/);
+    assert.match(message.content[0].text, /第 7 轮/);
+  });
+
+  it('leaves a normal resume alone', async (t) => {
+    const cordis = await loadCordis();
+    if (cordis === null) return t.skip('no dsh installation to load Cordis from');
+    const { sent } = await bootAndAnnounce({ source: 'resume', events: interruptedLog(), cordis });
+    assert.equal(sent.length, 0, 'opening an old session later must not resurrect it');
+  });
+
+  it('leaves a freshly created session alone', async (t) => {
+    const cordis = await loadCordis();
+    if (cordis === null) return t.skip('no dsh installation to load Cordis from');
+    const { sent } = await bootAndAnnounce({ source: 'startup', events: cleanLog(), cordis });
+    assert.equal(sent.length, 0);
+  });
+
+  it('does not loop when the crash reproduces', async (t) => {
+    const cordis = await loadCordis();
+    if (cordis === null) return t.skip('no dsh installation to load Cordis from');
+    // The log already contains a continuation this plugin wrote, and the turn is
+    // interrupted again — the exact shape of a crash that happens every run.
+    const looping = [
+      event('turn/start', { turn: 7 }, 0),
+      event('turn/end', { turn: 7, reason: { kind: 'interrupted' } }, 1),
+      event('user/message', { source: { kind: 'llm-network-retry' } }, 2),
+      event('turn/end', { turn: 7, reason: { kind: 'interrupted' } }, 3),
+    ];
+    const { sent } = await bootAndAnnounce({ source: 'startup', events: looping, cordis });
+    assert.equal(sent.length, 0, 'a reproducible crash must terminate, not restart-loop');
+  });
+});

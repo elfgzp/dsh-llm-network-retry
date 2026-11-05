@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  CONTINUATION_SOURCE,
+  alreadyContinued,
   continueMessage,
   interruptedTurn,
   recoverable,
@@ -183,5 +185,108 @@ describe('recoverable', () => {
     assert.equal(result.turn, 2);
     assert.deepEqual(result.unfinishedNames, ['bash']);
     assert.equal(result.unfinished.length, 1);
+  });
+});
+
+describe('alreadyContinued — the restart-loop guard', () => {
+  it('reports nothing when the plugin never wrote a continuation', () => {
+    reset();
+    const events = [
+      event('turn/start', { turn: 1 }),
+      event('turn/end', { turn: 1, reason: { kind: 'interrupted' } }),
+    ];
+    assert.equal(alreadyContinued(events, 1), false);
+  });
+
+  it('finds a continuation this plugin wrote after the interrupted turn', () => {
+    reset();
+    const events = [
+      event('turn/start', { turn: 1 }),
+      event('turn/end', { turn: 1, reason: { kind: 'interrupted' } }),
+      event('user/message', { source: { kind: CONTINUATION_SOURCE } }),
+      // That continuation crashed too, leaving another interrupted turn.
+      event('turn/end', { turn: 1, reason: { kind: 'interrupted' } }),
+    ];
+    assert.equal(alreadyContinued(events, 1), true, 'a reproducing crash must not loop forever');
+  });
+
+  it('ignores a message from any other author', () => {
+    reset();
+    const events = [
+      event('turn/end', { turn: 1, reason: { kind: 'interrupted' } }),
+      event('user/message', { source: { kind: 'user' } }),
+    ];
+    assert.equal(alreadyContinued(events, 1), false);
+  });
+
+  it('ignores a continuation written before the interrupted turn', () => {
+    reset();
+    const events = [
+      event('user/message', { source: { kind: CONTINUATION_SOURCE } }),
+      event('turn/end', { turn: 2, reason: { kind: 'interrupted' } }),
+    ];
+    assert.equal(alreadyContinued(events, 2), false, 'an older continuation does not cover a newer turn');
+  });
+
+  it('tolerates malformed input', () => {
+    assert.equal(alreadyContinued(undefined, 1), false);
+    assert.equal(alreadyContinued([null, {}], 1), false);
+  });
+});
+
+describe('recoverable — automatic vs manual', () => {
+  /** A log where the plugin already continued, then crashed again. */
+  function loopingLog() {
+    reset();
+    return [
+      event('turn/start', { turn: 1 }),
+      event('turn/end', { turn: 1, reason: { kind: 'interrupted' } }),
+      event('user/message', { source: { kind: CONTINUATION_SOURCE } }),
+      event('turn/end', { turn: 1, reason: { kind: 'interrupted' } }),
+    ];
+  }
+
+  it('still offers a manual continuation when the automatic path is blocked', () => {
+    const result = recoverable(loopingLog());
+    assert.ok(result, 'the user may still choose to continue');
+    assert.equal(result.alreadyContinued, true);
+  });
+
+  it('refuses the automatic path once it already ran', () => {
+    assert.equal(
+      recoverable(loopingLog(), { automatic: true }),
+      undefined,
+      'this is what makes a reproducible crash terminate instead of restart-looping',
+    );
+  });
+
+  it('allows the automatic path on a first crash', () => {
+    reset();
+    const events = [
+      event('turn/start', { turn: 5 }),
+      event('turn/end', { turn: 5, reason: { kind: 'interrupted' } }),
+    ];
+    const result = recoverable(events, { automatic: true });
+    assert.ok(result);
+    assert.equal(result.turn, 5);
+    assert.equal(result.alreadyContinued, false);
+  });
+});
+
+describe('continueMessage — automatic wording', () => {
+  it('tells the model the continuation was automatic', () => {
+    const message = continueMessage({ turn: 2, unfinished: [], automatic: true });
+    assert.match(message, /自动发送/);
+    assert.match(message, /不是用户此刻主动要求继续/);
+  });
+
+  it('keeps the same safety instructions in both modes', () => {
+    const manual = continueMessage({ turn: 2, unfinished: [{ name: 'bash' }] });
+    const automatic = continueMessage({ turn: 2, unfinished: [{ name: 'bash' }], automatic: true });
+    for (const message of [manual, automatic]) {
+      assert.match(message, /先核实当前实际状态/);
+      assert.match(message, /不要盲目重放/);
+      assert.match(message, /bash/);
+    }
   });
 });
