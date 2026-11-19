@@ -11,6 +11,7 @@ import {
   inScope,
   policyKey,
   resolveConfig,
+  route,
 } from '../lib/policy.js';
 
 /** A deterministic `random` so jitter never makes a test flaky. */
@@ -281,6 +282,49 @@ describe('decide', () => {
     });
     assert.equal(late.kind, 'delegate');
     assert.equal(late.reason, 'wait-ceiling');
+  });
+});
+
+describe('route', () => {
+  const base = { provider: 'p', model: 'm' };
+
+  it('names the mode a failure is answered in, without touching chain state', () => {
+    const resolved = resolveConfig();
+    const connection = route(resolved, { ...base, failure: { code: 'TRANSPORT' } });
+    assert.deepEqual({ ...connection }, { kind: 'policy', mode: 'always', category: 'connection', unbounded: true });
+
+    const server = route(resolved, { ...base, failure: { code: 'SERVER' } });
+    assert.deepEqual({ ...server }, { kind: 'policy', mode: 'normal', category: 'retryable', unbounded: false });
+  });
+
+  it('is the same decision decide() applies, so pre-routing cannot disagree with it', () => {
+    const resolved = resolveConfig();
+    for (const code of ['TRANSPORT', 'TIMEOUT', 'SERVER', 'RATE_LIMIT', 'AUTH', 'MYSTERY']) {
+      const routed = route(resolved, { ...base, failure: { code } });
+      const planned = decide(resolved, { ...base, failure: { code }, previousRetry: 0, random: noJitter, elapsedMs: 0 });
+      if (routed.kind === 'delegate') assert.equal(planned.kind, 'delegate', code);
+      else assert.equal(planned.mode, routed.mode, code);
+    }
+  });
+
+  it('reports the same delegation reasons as decide()', () => {
+    const reasons = [
+      [{ aborted: true, failure: { code: 'TRANSPORT' } }, 'aborted'],
+      [{ failure: { code: 'AUTH' } }, 'fatal'],
+      [{ failure: { code: 'MYSTERY' } }, 'unknown-code'],
+      [{ failure: { code: 'TRANSPORT' }, providerPolicy: { mode: 'always' } }, 'provider-always'],
+    ];
+    for (const [attempt, reason] of reasons) {
+      assert.equal(route(resolveConfig(), { ...base, ...attempt }).reason, reason);
+    }
+  });
+
+  it('is not affected by a spent budget, which belongs to one chain', () => {
+    // decide() must know the chain's own counter; route() must not, otherwise a
+    // caller could not look that counter up before routing.
+    const resolved = resolveConfig({ maxRetries: 0 });
+    assert.equal(route(resolved, { ...base, failure: { code: 'SERVER' } }).kind, 'policy');
+    assert.equal(decide(resolved, { ...base, failure: { code: 'SERVER' }, previousRetry: 0, random: noJitter }).reason, 'exhausted');
   });
 });
 

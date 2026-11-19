@@ -56,6 +56,7 @@ Codex CLI 里这条规则叫 `unbounded_connection_retries`（默认开启）：
 - **先落盘再等待。** 重试记录先写入会话，再启动计时器。崩溃或取消都不会留下看不见的挂起重试，重连后历史仍然自洽。
 - **取消立刻生效。** 你按停止，等待中的倒计时当场结束，不会「挂到 60 秒再说」。
 - **不重复建链。** 本插件 prepend 在自带执行器之前：连接类失败由它一家接管成一条无限链，而不是「自带 5 次 + 本插件再来一条」。已经自己声明 `mode: always` 的 provider 则完全交给它，不叠加。
+- **一条策略一条链。** 重试链的身份是 `(turn, step, provider, policyKey)`，而 `policyKey` 由模式（有界 `normal` / 无界 `always`）决定。所以一步之内失败类型从「可重试」变成「断网」时，插件会**新开一条链，从 1 重新计数、换新 `retryId`**；再切回来则接着原链记（`normal` 从 3 继续，而不是白送一轮预算）。这不是洁癖：DSH 读取会话时按这个身份校验编号，混用旧链的计数写出来的日志会让整个会话打不开。
 - **每条重试都是一次真实计费请求。** 无上限模式会一直重试到你取消或成功为止——这是它的目的，但请知悉。
 
 ## 判定表
@@ -171,7 +172,7 @@ DSH 在本轮完成前退出。这些工具调用的结果未知：bash、write�
 node --test test/*.test.js
 ```
 
-共 101 个测试：
+共 139 个测试（本机 117 通过 / 22 skip）：
 
 | 文件 | 内容 |
 |---|---|
@@ -182,8 +183,9 @@ node --test test/*.test.js
 | `test/scan.test.js` | 启动扫描：只读不取写权、句柄不泄漏、单会话失败不影响整体、可取消 |
 | `test/crash-recovery-real.test.js` | **用真实的 Context / Service 启动真实 Cordis**：RPC 行为、打开会话即自动续跑、崩溃可复现时不死循环、扫描端点只读 |
 | `test/composition.test.js` | 加载**真实的**自带 `dsh-llm-retry` 执行器，验证不双重建链、事件字段逐字段一致 |
+| `test/session-replay.test.js` | 把插件真实写出的事件喂给**真实的** DSH v4 会话读取器，验证日志可被加载（缺安装则 skip） |
 
-最后两组都需要能读取 `app.asar`（加载真实的自带执行器和真实的 Cordis），所以要用 Harness 自带的 Node 跑；普通 Node 下这 15 个会自动 skip：
+`composition` / `crash-recovery-real` 两组需要能读取 `app.asar`（加载真实的自带执行器和真实的 Cordis），因此要用 Harness 自带的 Node 跑；`session-replay` 需要本机装好的 `@deepseek-ai/dsh-session*` 包（macOS 的 `app.asar`、Linux 的 `node_modules` 均可，路径可用 `DSH_SESSION_PACKAGE_ROOT` 覆盖）。普通 `node --test` 下这三组里拿不到依赖的用例会自动 skip：
 
 ```bash
 DSH_DESKTOP_NODE_EXECUTABLE="/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness" \

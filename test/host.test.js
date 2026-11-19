@@ -347,3 +347,124 @@ describe('apply — provider scope', () => {
     assert.equal(events.length, 0);
   });
 });
+
+describe('apply — one chain per policy, not per step', () => {
+  it('numbers each mode from 1 when the category flips inside one step', async () => {
+    const events = [];
+    const { ctx, listeners } = fakeContext();
+    apply(ctx, { requestBackoff: { initialDelayMs: 1, maxDelayMs: 2 }, connectionBackoff: { initialDelayMs: 1, maxDelayMs: 2 } });
+    const agent = fakeAgent(events);
+
+    await fireError(listeners, payload({ agent, failure: { code: 'SERVER', message: '524' } }));
+    await fireError(listeners, payload({ agent, failure: { code: 'SERVER', message: '524' } }));
+    await fireError(listeners, payload({ agent, failure: { code: 'TRANSPORT', message: 'terminated' } }));
+
+    const scheduled = events.filter((event) => event.type === 'llm/retry');
+    assert.deepEqual(scheduled.map((event) => [event.data.mode, event.data.retry]), [
+      ['normal', 1],
+      ['normal', 2],
+      ['always', 1],
+    ]);
+    // A fresh chain gets its own id: the log groups attempts by (policyKey, retryId).
+    assert.notEqual(scheduled[0].data.retryId, scheduled[2].data.retryId);
+    assert.notEqual(scheduled[0].data.policyKey, scheduled[2].data.policyKey);
+  });
+
+  it('resumes the bounded chain where it left off when the category flips back', async () => {
+    const events = [];
+    const { ctx, listeners } = fakeContext();
+    apply(ctx, { requestBackoff: { initialDelayMs: 1, maxDelayMs: 2 }, connectionBackoff: { initialDelayMs: 1, maxDelayMs: 2 } });
+    const agent = fakeAgent(events);
+
+    await fireError(listeners, payload({ agent, failure: { code: 'SERVER', message: '524' } }));
+    await fireError(listeners, payload({ agent, failure: { code: 'TRANSPORT', message: 'terminated' } }));
+    await fireError(listeners, payload({ agent, failure: { code: 'SERVER', message: '503' } }));
+
+    const scheduled = events.filter((event) => event.type === 'llm/retry');
+    assert.deepEqual(scheduled.map((event) => [event.data.mode, event.data.retry]), [
+      ['normal', 1],
+      ['always', 1],
+      ['normal', 2],
+    ]);
+    // Returning to a chain must not spend a second retryId on the same counter.
+    assert.equal(scheduled[0].data.retryId, scheduled[2].data.retryId);
+  });
+
+  it('keeps every chain intact when a start marker fails to append', async () => {
+    const events = [];
+    const { ctx, listeners } = fakeContext();
+    apply(ctx, { requestBackoff: { initialDelayMs: 1, maxDelayMs: 2 }, connectionBackoff: { initialDelayMs: 1, maxDelayMs: 2 } });
+    const agent = fakeAgent(events, { failAppend: 'llm/retry-started' });
+
+    await fireError(listeners, payload({ agent, failure: { code: 'SERVER', message: '524' } }));
+    await fireError(listeners, payload({ agent, failure: { code: 'TRANSPORT', message: 'terminated' } }));
+
+    // The scheduled rows still landed, so the next failure must not renumber them.
+    const scheduled = events.filter((event) => event.type === 'llm/retry');
+    assert.deepEqual(scheduled.map((event) => [event.data.mode, event.data.retry]), [
+      ['normal', 1],
+      ['always', 1],
+    ]);
+  });
+
+  it('frees the attempt number again when the scheduled row never reached the log', async () => {
+    const events = [];
+    const { ctx, listeners } = fakeContext();
+    apply(ctx, { connectionBackoff: { initialDelayMs: 1, maxDelayMs: 2 } });
+    let rejectOnce = true;
+    const agent = {
+      id: 'session-1',
+      session: {
+        append(type, data) {
+          // The first scheduled row is refused: nothing durable exists for it, so
+          // the next failure must be allowed to claim attempt 1.
+          if (type === 'llm/retry' && rejectOnce) {
+            rejectOnce = false;
+            throw new Error('append rejected');
+          }
+          events.push({ type, data });
+        },
+        requestHeader() {
+          return { config: { provider: 'tencent-intranet', model: 'm' } };
+        },
+      },
+    };
+
+    await fireError(listeners, payload({ agent }));
+    await fireError(listeners, payload({ agent }));
+
+    const scheduled = events.filter((event) => event.type === 'llm/retry');
+    assert.deepEqual(scheduled.map((event) => event.data.retry), [1], 'the unrecorded attempt did not burn a number');
+  });
+
+  it('keeps the attempt number spent when only the started marker failed', async () => {
+    const events = [];
+    const { ctx, listeners } = fakeContext();
+    apply(ctx, { connectionBackoff: { initialDelayMs: 1, maxDelayMs: 2 } });
+    const agent = fakeAgent(events, { failAppend: 'llm/retry-started' });
+
+    await fireError(listeners, payload({ agent }));
+    await fireError(listeners, payload({ agent }));
+
+    // Both scheduled rows are durable, so the numbers may not repeat — the reader
+    // would refuse a second attempt 1 on the same chain.
+    const scheduled = events.filter((event) => event.type === 'llm/retry');
+    assert.deepEqual(scheduled.map((event) => event.data.retry), [1, 2]);
+  });
+
+  it('starts over on the next step', async () => {
+    const events = [];
+    const { ctx, listeners } = fakeContext();
+    apply(ctx, { requestBackoff: { initialDelayMs: 1, maxDelayMs: 2 }, connectionBackoff: { initialDelayMs: 1, maxDelayMs: 2 } });
+    const agent = fakeAgent(events);
+
+    await fireError(listeners, payload({ agent, step: 1, failure: { code: 'SERVER', message: '524' } }));
+    await fireError(listeners, payload({ agent, step: 1, failure: { code: 'TRANSPORT', message: 'terminated' } }));
+    await fireError(listeners, payload({ agent, step: 2, failure: { code: 'SERVER', message: '524' } }));
+    await fireError(listeners, payload({ agent, step: 2, failure: { code: 'TRANSPORT', message: 'terminated' } }));
+
+    const scheduled = events.filter((event) => event.type === 'llm/retry');
+    assert.deepEqual(scheduled.map((event) => event.data.retry), [1, 1, 1, 1]);
+  });
+});
+

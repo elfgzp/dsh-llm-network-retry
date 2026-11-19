@@ -1,6 +1,6 @@
 {
   "name": "dsh-llm-network-retry",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "type": "module",
   "description": "Keep model requests alive: connection failures retry without an attempt limit (Codex-style), real errors fail fast, and a turn killed by a process crash is flagged at boot and resumes when its session is opened.",
